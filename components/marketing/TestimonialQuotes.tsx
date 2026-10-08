@@ -1,16 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SectionCard } from "@/components/layout/SectionCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { cn } from "@/lib/cn";
-import { usePinnedItems } from "@/components/marketing/usePinnedItems";
+import {
+  freezeTargetY,
+  holdFromGesture,
+  holdIsStale,
+  isPassedHold,
+  markScrollPhase,
+  pinToHold,
+  shouldFinishMissed,
+  shouldStartHold,
+  syncPin,
+  type PinAnchor,
+} from "@/lib/scrollHold";
 
 type Testimonial = {
   name: string;
   title: string;
   quote: string;
 };
+
+const GESTURE = 14;
+const COOL_MS = 520;
 
 function TypeQuote({
   quote,
@@ -72,38 +86,239 @@ function TypeQuote({
   );
 }
 
-function nextPhase(
-  current: "idle" | "wait" | "play",
-  amount: number,
-): "idle" | "wait" | "play" {
-  if (current === "play") return "play";
-  if (amount >= 0.62) return "play";
-  return "wait";
-}
-
 export function TestimonialQuotes({ items }: { items: readonly Testimonial[] }) {
   const sceneRef = useRef<HTMLDivElement>(null);
-  const phasesRef = useRef<Array<"idle" | "wait" | "play">>([]);
-  const [phases, setPhases] = useState<Array<"idle" | "wait" | "play">>([]);
+  const [revealed, setRevealed] = useState(0);
+  const count = items.length;
 
-  if (phasesRef.current.length !== items.length) {
-    phasesRef.current = items.map(() => "idle");
-  }
+  useLayoutEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setRevealed(count);
+      return;
+    }
 
-  const onItem = useCallback((index: number, amount: number) => {
-    const current = phasesRef.current[index] ?? "idle";
-    const next = nextPhase(current, amount);
-    if (current === next) return;
-    const copy = phasesRef.current.slice();
-    copy[index] = next;
-    phasesRef.current = copy;
-    setPhases(copy);
-  }, []);
+    const card = scene.querySelector<HTMLElement>(".dh-scroll-card");
+    const quotes = [...scene.querySelectorAll<HTMLElement>(".dh-scroll-item")];
+    const blur = document.querySelector<HTMLElement>(".dh-bottom-blur");
+    if (!card) return;
 
-  usePinnedItems(sceneRef, onItem);
+    let phase: "free" | "hold" | "released" = "free";
+    let anchor: PinAnchor = { y: 0, bottom: 0 };
+    let shown = 0;
+    let skipPin = false;
+    let cooling = false;
+    let coolTimer = 0;
+
+    const cool = () => {
+      cooling = true;
+      window.clearTimeout(coolTimer);
+      coolTimer = window.setTimeout(() => {
+        cooling = false;
+      }, COOL_MS);
+    };
+
+    const freezeTarget = () => freezeTargetY(blur);
+
+    const mark = () => {
+      markScrollPhase(scene, phase);
+    };
+
+    const pin = () => {
+      if (phase !== "hold") return true;
+      return syncPin(card, anchor);
+    };
+
+    const leaveUp = () => {
+      skipPin = true;
+      phase = shown >= count ? "released" : "free";
+      mark();
+    };
+
+    const paintHold = (next: number) => {
+      quotes.forEach((quote, index) => {
+        const on = index < next;
+        quote.style.opacity = on ? "1" : "0";
+        quote.style.transform = on
+          ? "none"
+          : "translate3d(0, 1.35rem, 0) scale(0.96)";
+        quote.toggleAttribute("inert", !on);
+      });
+      setRevealed(next);
+    };
+
+    const finish = () => {
+      shown = count;
+      phase = "released";
+      mark();
+      paintHold(count);
+    };
+
+    const apply = () => {
+      const box = card.getBoundingClientRect();
+      const target = freezeTarget();
+
+      if (phase === "hold") {
+        if (isPassedHold(box)) {
+          finish();
+          return;
+        }
+        if (holdIsStale(box) || !pin()) {
+          leaveUp();
+          return;
+        }
+        return;
+      }
+
+      if (phase === "released") {
+        paintHold(count);
+        return;
+      }
+
+      if (isPassedHold(box) || shouldFinishMissed(box)) {
+        finish();
+        return;
+      }
+      paintHold(shown);
+      if (skipPin) {
+        if (box.bottom > target + 8) skipPin = false;
+        return;
+      }
+      if (shown < count && shouldStartHold(scene, box, target)) {
+        phase = "hold";
+        anchor = pinToHold(card, target);
+        mark();
+        paintHold(shown);
+      }
+    };
+
+    const advanceHold = (delta: number) => {
+      if (!pin()) {
+        leaveUp();
+        return;
+      }
+      if (cooling || Math.abs(delta) < GESTURE) return;
+
+      if (shown < count) {
+        shown += 1;
+        paintHold(shown);
+        cool();
+        return;
+      }
+      phase = "released";
+      mark();
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      const action = holdFromGesture(
+        event.deltaY,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
+        leaveUp();
+        return;
+      }
+      if (action === "finish") {
+        finish();
+        return;
+      }
+      event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(shown);
+      }
+      advanceHold(event.deltaY);
+    };
+
+    let touchY = 0;
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY ?? 0;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const y = event.touches[0]?.clientY ?? touchY;
+      const delta = touchY - y;
+      touchY = y;
+      const action = holdFromGesture(
+        delta,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
+        leaveUp();
+        return;
+      }
+      if (action === "finish") {
+        finish();
+        return;
+      }
+      event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(shown);
+      }
+      advanceHold(delta);
+    };
+
+    const onKey = (event: KeyboardEvent) => {
+      if (phase !== "hold") return;
+      const down =
+        event.key === "ArrowDown" ||
+        event.key === "PageDown" ||
+        event.key === " ";
+      const up = event.key === "ArrowUp" || event.key === "PageUp";
+      if (!down && !up) return;
+      if (up) {
+        leaveUp();
+        return;
+      }
+      event.preventDefault();
+      advanceHold(GESTURE);
+    };
+
+    scene.classList.add("is-live");
+    mark();
+    apply();
+
+    window.addEventListener("scroll", apply, { passive: true });
+    window.addEventListener("resize", apply);
+    window.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      window.clearTimeout(coolTimer);
+      scene.classList.remove("is-live");
+      delete scene.dataset.scrollPhase;
+      quotes.forEach((quote) => {
+        quote.removeAttribute("style");
+        quote.removeAttribute("inert");
+      });
+      window.removeEventListener("scroll", apply);
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [count]);
 
   return (
-    <div ref={sceneRef} id="testimonials" className="dh-scroll-scene">
+    <div ref={sceneRef} id="testimonials" className="dh-scroll-scene dh-quotes-scene">
       <SectionCard className="dh-scroll-card">
         <h2 className="text-2xl font-semibold tracking-tight text-ink">
           What clients say
@@ -120,7 +335,7 @@ export function TestimonialQuotes({ items }: { items: readonly Testimonial[] }) 
                   <TypeQuote
                     quote={item.quote}
                     delay={0}
-                    phase={phases[index] ?? "idle"}
+                    phase={index < revealed ? "play" : "wait"}
                   />
                   <p className="mt-4 text-xs text-ink-muted">{item.name}</p>
                 </GlassCard>

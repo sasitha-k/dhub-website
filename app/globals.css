@@ -697,6 +697,13 @@ a:hover > .dh-surface-card,
   will-change: opacity, transform;
 }
 
+.dh-quotes-scene.is-live .dh-scroll-item,
+.dh-faq-scene.is-live .dh-scroll-item {
+  transition:
+    opacity 160ms linear,
+    transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .dh-why-more {
   overflow: hidden;
 }
