@@ -661,24 +661,22 @@ a:hover > .dh-surface-card,
   will-change: opacity, transform;
 }
 
-.dh-packages-scene.is-live {
-  position: relative;
-  z-index: 40;
-  overflow: visible;
+.dh-packages-more {
+  overflow: hidden;
 }
 
-.dh-packages-scene.is-live .dh-packages-card {
+.dh-packages-scene.is-live:not(.is-open) .dh-packages-more {
+  height: 0;
+}
+
+.dh-packages-scene.is-open .dh-packages-more {
   overflow: visible;
+  height: auto;
 }
 
 .dh-packages-scene.is-live .dh-packages-scroll-item {
-  position: relative;
-  z-index: 2;
-  opacity: 0;
   will-change: opacity, transform;
-  transition:
-    opacity 160ms linear,
-    transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center center;
 }
 
 .dh-scroll-scene.is-live,
@@ -1088,6 +1086,7 @@ a:focus-visible > .dh-service-tile:has(img) {
   .dh-stagger-grid > *,
   .dh-services-scroll-item,
   .dh-packages-scroll-item,
+  .dh-packages-more,
   .dh-why-item,
   .dh-why-more,
   .dh-why-copy-card > *,

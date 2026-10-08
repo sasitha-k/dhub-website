@@ -9,11 +9,13 @@ import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { comingSoonService } from "@/content/services";
 import {
   freezeTargetY,
-  isNextHold,
+  holdFromGesture,
   holdIsStale,
   isPassedHold,
   markScrollPhase,
+  pinToHold,
   shouldFinishMissed,
+  shouldStartHold,
 } from "@/lib/scrollHold";
 
 const HOLD_DISTANCE = 1.15;
@@ -112,10 +114,10 @@ export function HomeCab() {
         if (box.bottom > target + 8) skipPin = false;
         return;
       }
-      if (hold < 1 && box.bottom <= target && isNextHold(scene, box)) {
+      if (hold < 1 && shouldStartHold(scene, box, target)) {
         phase = "hold";
+        freezeY = pinToHold(card, target).y;
         mark();
-        freezeY = window.scrollY;
         paint(hold);
       }
     };
@@ -144,22 +146,34 @@ export function HomeCab() {
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (!live || phase !== "hold") return;
-      const box = card.getBoundingClientRect();
-      if (holdIsStale(box)) {
-        if (isPassedHold(box)) {
-          hold = 1;
-          phase = "released";
-          mark();
-          paint(1);
-        } else leaveUp();
-        return;
-      }
-      if (event.deltaY < 0) {
+      if (!live) return;
+      const action = holdFromGesture(
+        event.deltaY,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        hold = 1;
+        phase = "released";
+        mark();
+        paint(1);
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        freezeY = pinToHold(card, freezeTarget()).y;
+        mark();
+        paint(hold);
+      }
       advanceHold(event.deltaY);
     };
 
@@ -168,15 +182,37 @@ export function HomeCab() {
       touchY = event.touches[0]?.clientY ?? 0;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (!live || phase !== "hold") return;
+      if (!live) return;
       const y = event.touches[0]?.clientY ?? touchY;
       const delta = touchY - y;
       touchY = y;
-      if (delta < 0) {
+      const action = holdFromGesture(
+        delta,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        hold = 1;
+        phase = "released";
+        mark();
+        paint(1);
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        freezeY = pinToHold(card, freezeTarget()).y;
+        mark();
+        paint(hold);
+      }
       advanceHold(delta);
     };
 

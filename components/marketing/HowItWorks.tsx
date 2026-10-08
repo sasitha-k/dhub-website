@@ -5,14 +5,14 @@ import { SectionCard } from "@/components/layout/SectionCard";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
   freezeTargetY,
-  isNextHold,
+  holdFromGesture,
   holdIsStale,
   isPassedHold,
   markScrollPhase,
+  pinToHold,
   shouldFinishMissed,
-  shouldLatchHold,
+  shouldStartHold,
   syncPin,
-  takePinAnchor,
   type PinAnchor,
 } from "@/lib/scrollHold";
 
@@ -163,13 +163,9 @@ export function HowItWorks() {
         if (box.bottom > target + 8) skipPin = false;
         return;
       }
-      if (
-        revealed < COUNT &&
-        shouldLatchHold(box, target) &&
-        isNextHold(scene, box)
-      ) {
+      if (revealed < COUNT && shouldStartHold(scene, box, target)) {
         phase = "hold";
-        anchor = takePinAnchor(card);
+        anchor = pinToHold(card, target);
         mark();
         paintHold(revealed);
       }
@@ -193,17 +189,30 @@ export function HowItWorks() {
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (phase !== "hold") return;
-      if (holdIsStale(card.getBoundingClientRect())) {
-        if (isPassedHold(card.getBoundingClientRect())) finish();
-        else leaveUp();
-        return;
-      }
-      if (event.deltaY < 0) {
+      const action = holdFromGesture(
+        event.deltaY,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        finish();
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(revealed);
+      }
       advanceHold(event.deltaY);
     };
 
@@ -212,15 +221,33 @@ export function HowItWorks() {
       touchY = event.touches[0]?.clientY ?? 0;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (phase !== "hold") return;
       const y = event.touches[0]?.clientY ?? touchY;
       const delta = touchY - y;
       touchY = y;
-      if (delta < 0) {
+      const action = holdFromGesture(
+        delta,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        finish();
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(revealed);
+      }
       advanceHold(delta);
     };
 

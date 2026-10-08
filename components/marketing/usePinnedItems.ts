@@ -3,12 +3,13 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import {
   freezeTargetY,
-  isNextHold,
+  holdFromGesture,
   holdIsStale,
   isPassedHold,
   markScrollPhase,
+  pinToHold,
   shouldFinishMissed,
-  shouldLatchHold,
+  shouldStartHold,
   syncPin,
   takePinAnchor,
   type PinAnchor,
@@ -178,9 +179,9 @@ export function usePinnedItems(
         if (box.bottom > target + 8) skipPin = false;
         return;
       }
-      if (hold < 1 && shouldLatchHold(box, target) && isNextHold(scene, box)) {
+      if (hold < 1 && shouldStartHold(scene, box, target)) {
         phase = "hold";
-        anchor = takePinAnchor(card);
+        anchor = pinToHold(card, target);
         mark();
         paintHold(hold);
       }
@@ -199,17 +200,30 @@ export function usePinnedItems(
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (phase !== "hold") return;
-      if (holdIsStale(card.getBoundingClientRect())) {
-        if (isPassedHold(card.getBoundingClientRect())) finish();
-        else leaveUp();
-        return;
-      }
-      if (event.deltaY < 0) {
+      const action = holdFromGesture(
+        event.deltaY,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        finish();
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(hold);
+      }
       advanceHold(event.deltaY);
     };
 
@@ -218,15 +232,33 @@ export function usePinnedItems(
       touchY = event.touches[0]?.clientY ?? 0;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (phase !== "hold") return;
       const y = event.touches[0]?.clientY ?? touchY;
       const delta = touchY - y;
       touchY = y;
-      if (delta < 0) {
+      const action = holdFromGesture(
+        delta,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
         return;
       }
+      if (action === "finish") {
+        finish();
+        return;
+      }
       event.preventDefault();
+      if (action === "latch") {
+        phase = "hold";
+        anchor = pinToHold(card, freezeTarget());
+        mark();
+        paintHold(hold);
+      }
       advanceHold(delta);
     };
 

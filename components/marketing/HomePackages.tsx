@@ -12,27 +12,27 @@ import {
   holdIsStale,
   isPassedHold,
   markScrollPhase,
-  shouldFinishMissed,
+  pinToHold,
+  syncPin,
+  type PinAnchor,
 } from "@/lib/scrollHold";
 
-const COUNT = homeTeaserPackages.length;
-const HOLD_DISTANCE = 1.35;
+const CARD_COUNT = homeTeaserPackages.length;
+const THROW_DISTANCE = 1.2;
+
+type ThrowOffset = { dx: number; dy: number; rot: number };
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
-function hideOffset(node: HTMLElement) {
-  const nav = document.querySelector(".dh-masthead-nav");
-  const navBottom = nav?.getBoundingClientRect().bottom ?? 72;
-  const box = node.getBoundingClientRect();
-  return Math.max(0, box.top - navBottom + 18);
+function unit(progress: number, start: number, end: number) {
+  if (end === start) return progress >= end ? 1 : 0;
+  return clamp((progress - start) / (end - start));
 }
 
-function paintCard(node: HTMLElement, shown: boolean, from = 0) {
-  node.style.opacity = shown ? "1" : "0";
-  node.style.transform = shown ? "none" : `translate3d(0, ${-from}px, 0)`;
-  node.toggleAttribute("inert", !shown);
+function easeOut(t: number) {
+  return 1 - (1 - clamp(t)) ** 3;
 }
 
 export function HomePackages() {
@@ -41,35 +41,33 @@ export function HomePackages() {
   useLayoutEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
+    const motionOk = window.matchMedia(
+      "(prefers-reduced-motion: no-preference)",
+    );
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const card = scene.querySelector<HTMLElement>(".dh-packages-card");
+    const head = scene.querySelector<HTMLElement>(".dh-packages-head");
+    const more = scene.querySelector<HTMLElement>(".dh-packages-more");
+    const inner = scene.querySelector<HTMLElement>(".dh-packages-more-inner");
     const cards = [
       ...scene.querySelectorAll<HTMLElement>(".dh-packages-scroll-item"),
     ];
-    const card = scene.querySelector<HTMLElement>(".dh-packages-card");
     const blur = document.querySelector<HTMLElement>(".dh-bottom-blur");
-    if (!card) return;
+    if (!card || !head || !more || !inner || cards.length === 0) return;
 
-    const fromByIndex: number[] = [];
-    const shownAt = cards.map(() => false);
     let phase: "free" | "hold" | "released" = "free";
-    let freezeY = 0;
-    let hold = 0;
+    let anchor: PinAnchor = { y: 0, bottom: 0 };
+    let throwT = 0;
+    let opened = false;
     let skipPin = false;
-
-    const measure = () => {
-      cards.forEach((item) => {
-        item.style.transition = "none";
-        item.style.transform = "none";
-      });
-      cards.forEach((item, index) => {
-        fromByIndex[index] = hideOffset(item);
-      });
-      cards.forEach((item, index) => {
-        item.style.transition = "";
-        paintCard(item, shownAt[index] ?? false, fromByIndex[index] ?? 0);
-      });
-    };
+    let live = false;
+    let rowHeight = 0;
+    const offsets: ThrowOffset[] = cards.map((_, index) => ({
+      dx: -320 - index * 36,
+      dy: (index - 1.5) * 12,
+      rot: -18 + index * 6,
+    }));
 
     const freezeTarget = () => freezeTargetY(blur);
 
@@ -78,108 +76,190 @@ export function HomePackages() {
     };
 
     const pin = () => {
-      if (phase !== "hold") return;
-      const box = card.getBoundingClientRect();
-      if (holdIsStale(box) || window.scrollY < freezeY - 24) return;
-      if (Math.abs(window.scrollY - freezeY) > 0.5) {
-        window.scrollTo({ top: freezeY, behavior: "instant" });
-      }
+      if (phase !== "hold") return true;
+      return syncPin(card, anchor);
     };
 
-    const paintHold = (amount: number) => {
+    const measure = () => {
+      const previous = more.style.height;
+      more.style.height = "auto";
+      cards.forEach((item) => {
+        item.style.transform = "none";
+        item.style.opacity = "1";
+      });
+      rowHeight = Math.ceil(inner.scrollHeight);
+      const stage = more.getBoundingClientRect();
+      const originX = stage.left - 160;
+      const originY = stage.top + Math.max(stage.height, rowHeight) / 2;
       cards.forEach((item, index) => {
-        const shown = amount >= (index + 0.2) / COUNT;
-        if (shown === shownAt[index]) return;
-        shownAt[index] = shown;
-        paintCard(item, shown, fromByIndex[index] ?? 0);
+        const box = item.getBoundingClientRect();
+        offsets[index] = {
+          dx: originX - (box.left + box.width / 2),
+          dy: originY - (box.top + box.height / 2) + (index - 1.5) * 16,
+          rot: -18 + index * 7,
+        };
+      });
+      more.style.height = previous;
+    };
+
+    const expandFromView = () => {
+      const box = card.getBoundingClientRect();
+      if (box.top >= window.innerHeight || isPassedHold(box)) return 0;
+      const target = freezeTarget();
+      const headH = head.getBoundingClientRect().height;
+      const room = target - box.top - headH;
+      return clamp(room / Math.max(rowHeight, 1));
+    };
+
+    const paintCard = (
+      node: HTMLElement,
+      amount: number,
+      offset: ThrowOffset,
+    ) => {
+      const t = easeOut(amount);
+      node.style.opacity = String(t);
+      node.style.transform =
+        t >= 0.995
+          ? "none"
+          : `translate3d(${offset.dx * (1 - t)}px, ${offset.dy * (1 - t)}px, 0) rotate(${offset.rot * (1 - t)}deg) scale(${0.94 + t * 0.06})`;
+      node.toggleAttribute("inert", t < 0.55);
+    };
+
+    const paintThrow = (amount: number) => {
+      cards.forEach((item, index) => {
+        paintCard(
+          item,
+          unit(amount, index / CARD_COUNT, (index + 1) / CARD_COUNT),
+          offsets[index] ?? offsets[0],
+        );
       });
     };
 
-    const apply = () => {
+    const paintExpand = (expand: number) => {
+      const open = opened || phase === "released" || throwT >= 1;
+      scene.classList.toggle("is-open", open);
+      const nextHeight = open ? "auto" : `${Math.round(rowHeight * expand)}px`;
+      if (more.style.height !== nextHeight) more.style.height = nextHeight;
+      more.toggleAttribute("inert", !open && expand < 0.12);
+    };
+
+    const finish = () => {
+      opened = true;
+      throwT = 1;
+      phase = "released";
+      scene.classList.add("is-open");
+      mark();
+      paintExpand(1);
+      paintThrow(1);
+    };
+
+    const paint = () => {
+      if (opened || phase === "released") {
+        paintExpand(1);
+        paintThrow(1);
+        return;
+      }
       if (phase === "hold") {
-        const held = card.getBoundingClientRect();
-        if (isPassedHold(held)) {
-          hold = 1;
-          phase = "released";
-          mark();
-          paintHold(1);
-          return;
-        }
-        if (holdIsStale(held) || window.scrollY < freezeY - 24) {
-          skipPin = true;
-          phase = hold >= 1 ? "released" : "free";
-          mark();
-        }
+        paintExpand(1);
+        paintThrow(throwT);
         return;
       }
+      paintExpand(expandFromView());
+      paintThrow(0);
+    };
 
-      if (phase === "released") {
-        paintHold(1);
-        return;
-      }
-
+    const wholeSectionVisible = () => {
       const box = card.getBoundingClientRect();
       const target = freezeTarget();
-      if (isPassedHold(box) || shouldFinishMissed(box)) {
-        hold = 1;
-        phase = "released";
-        mark();
-        paintHold(1);
+      if (isPassedHold(box) || box.top >= window.innerHeight) return false;
+      const expand = expandFromView();
+      const headH = head.getBoundingClientRect().height;
+      const fits = 64 + headH + rowHeight <= target + 8;
+      if (fits) {
+        return expand >= 0.995 && box.top > 56 && box.bottom <= target + 16;
+      }
+      return box.top <= 72 && expand >= 0.98;
+    };
+
+    const catchThrow = (from = 0) => {
+      phase = "hold";
+      throwT = from;
+      skipPin = false;
+      measure();
+      paintExpand(1);
+      anchor = pinToHold(card, freezeTarget());
+      mark();
+      paintThrow(throwT);
+    };
+
+    const apply = () => {
+      if (!live) return;
+      const box = card.getBoundingClientRect();
+      const target = freezeTarget();
+
+      if (opened || phase === "released") {
+        paint();
         return;
       }
-      paintHold(hold);
+
+      if (isPassedHold(box)) {
+        finish();
+        return;
+      }
+
+      if (phase === "hold") {
+        if (holdIsStale(box) || !pin()) finish();
+        return;
+      }
+
+      paint();
       if (skipPin) {
         if (box.bottom > target + 8) skipPin = false;
         return;
       }
-      if (hold < 1 && box.bottom <= target && isNextHold(scene, box)) {
-        phase = "hold";
-        mark();
-        freezeY = window.scrollY;
-        paintHold(hold);
+      if (wholeSectionVisible() && isNextHold(scene, box)) {
+        catchThrow(0);
       }
     };
 
-    const advanceHold = (delta: number) => {
+    const advanceThrow = (delta: number) => {
       if (delta < 0) {
-        skipPin = true;
-        phase = hold >= 1 ? "released" : "free";
-        mark();
+        finish();
         return;
       }
-      hold = clamp(hold + delta / (window.innerHeight * HOLD_DISTANCE));
-      paintHold(hold);
-      pin();
-      if (hold >= 1) {
-        phase = "released";
-        mark();
+      if (phase === "hold" && !pin()) {
+        finish();
+        return;
       }
-    };
-
-    const leaveUp = () => {
-      skipPin = true;
-      phase = hold >= 1 ? "released" : "free";
-      mark();
+      throwT = clamp(throwT + delta / (window.innerHeight * THROW_DISTANCE));
+      paintThrow(throwT);
+      if (throwT >= 1) finish();
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (phase !== "hold") return;
+      if (!live || opened || phase === "released") return;
       const box = card.getBoundingClientRect();
-      if (holdIsStale(box)) {
-        if (isPassedHold(box)) {
-          hold = 1;
-          phase = "released";
-          mark();
-          paintHold(1);
-        } else leaveUp();
-        return;
-      }
+
       if (event.deltaY < 0) {
-        leaveUp();
+        if (phase === "hold") finish();
         return;
       }
-      event.preventDefault();
-      advanceHold(event.deltaY);
+
+      if (phase === "hold") {
+        event.preventDefault();
+        advanceThrow(event.deltaY);
+        return;
+      }
+
+      if (skipPin) {
+        skipPin = false;
+        return;
+      }
+      if (wholeSectionVisible() && isNextHold(scene, box)) {
+        event.preventDefault();
+        catchThrow(0);
+        advanceThrow(event.deltaY);
+      }
     };
 
     let touchY = 0;
@@ -187,44 +267,92 @@ export function HomePackages() {
       touchY = event.touches[0]?.clientY ?? 0;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (phase !== "hold") return;
+      if (!live || opened || phase === "released") return;
       const y = event.touches[0]?.clientY ?? touchY;
       const delta = touchY - y;
       touchY = y;
+      const box = card.getBoundingClientRect();
       if (delta < 0) {
-        leaveUp();
+        if (phase === "hold") finish();
         return;
       }
-      event.preventDefault();
-      advanceHold(delta);
+      if (phase === "hold") {
+        event.preventDefault();
+        advanceThrow(delta);
+        return;
+      }
+      if (skipPin) {
+        skipPin = false;
+        return;
+      }
+      if (wholeSectionVisible() && isNextHold(scene, box)) {
+        event.preventDefault();
+        catchThrow(0);
+        advanceThrow(delta);
+      }
     };
 
     const onKey = (event: KeyboardEvent) => {
-      if (phase !== "hold") return;
+      if (!live || opened || phase === "released") return;
       const down =
         event.key === "ArrowDown" ||
         event.key === "PageDown" ||
         event.key === " ";
       const up = event.key === "ArrowUp" || event.key === "PageUp";
       if (!down && !up) return;
+      const step =
+        (event.key.startsWith("Page") ? 0.28 : 0.12) *
+        window.innerHeight *
+        THROW_DISTANCE;
       if (up) {
-        leaveUp();
+        if (phase === "hold") finish();
         return;
       }
-      event.preventDefault();
-      const step = event.key.startsWith("Page") ? 2 / COUNT : 1 / COUNT;
-      advanceHold(step * window.innerHeight * HOLD_DISTANCE);
+      if (phase === "hold") {
+        event.preventDefault();
+        advanceThrow(step);
+      }
     };
 
     const onResize = () => {
+      if (!live) return;
+      measure();
+      paint();
+      apply();
+    };
+
+    const stop = () => {
+      if (!live) return;
+      live = false;
+      scene.classList.remove("is-live", "is-open");
+      delete scene.dataset.scrollPhase;
+      more.removeAttribute("style");
+      more.removeAttribute("inert");
+      cards.forEach((item) => {
+        item.removeAttribute("style");
+        item.removeAttribute("inert");
+      });
+      phase = "free";
+      throwT = 0;
+      opened = false;
+    };
+
+    const start = () => {
+      if (live) return;
+      live = true;
+      phase = "free";
+      throwT = 0;
+      opened = false;
+      scene.classList.add("is-live");
+      mark();
       measure();
       apply();
     };
 
-    scene.classList.add("is-live");
-    mark();
-    measure();
-    apply();
+    const sync = () => {
+      if (motionOk.matches && desktop.matches) start();
+      else stop();
+    };
 
     window.addEventListener("scroll", apply, { passive: true });
     window.addEventListener("resize", onResize);
@@ -232,23 +360,27 @@ export function HomePackages() {
     window.addEventListener("touchstart", onTouchStart, { passive: true });
     window.addEventListener("touchmove", onTouchMove, { passive: false });
     window.addEventListener("keydown", onKey);
+    motionOk.addEventListener("change", sync);
+    desktop.addEventListener("change", sync);
+    sync();
 
     return () => {
-      scene.classList.remove("is-live");
-      delete scene.dataset.scrollPhase;
+      stop();
       window.removeEventListener("scroll", apply);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("wheel", onWheel);
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("keydown", onKey);
+      motionOk.removeEventListener("change", sync);
+      desktop.removeEventListener("change", sync);
     };
   }, []);
 
   return (
     <div ref={sceneRef} id="packages" className="dh-packages-scene">
       <SectionCard className="dh-packages-card">
-        <div className="relative z-0 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="dh-packages-head relative z-0 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="max-w-xl">
             <p className="text-[0.68rem] font-medium tracking-[0.16em] text-brand uppercase">
               Packages
@@ -265,12 +397,16 @@ export function HomePackages() {
             <ArrowRight size={14} aria-hidden="true" />
           </Button>
         </div>
-        <div className="dh-packages-row relative z-0 mt-[14px] grid gap-[14px] sm:grid-cols-2 xl:grid-cols-4">
-          {homeTeaserPackages.map((item) => (
-            <div key={item.slug} className="dh-packages-scroll-item">
-              <PackageCard item={item} showBadge={false} />
+        <div className="dh-packages-more">
+          <div className="dh-packages-more-inner">
+            <div className="dh-packages-row relative z-0 mt-[14px] grid gap-[14px] sm:grid-cols-2 xl:grid-cols-4">
+              {homeTeaserPackages.map((item) => (
+                <div key={item.slug} className="dh-packages-scroll-item">
+                  <PackageCard item={item} showBadge={false} />
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       </SectionCard>
     </div>

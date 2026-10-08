@@ -8,14 +8,12 @@ import { Button } from "@/components/ui/Button";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
   freezeTargetY,
-  isNextHold,
+  holdFromGesture,
   holdIsStale,
   isPassedHold,
   markScrollPhase,
   shouldFinishMissed,
-  shouldLatchHold,
-  syncPin,
-  takePinAnchor,
+  shouldStartHold,
   type PinAnchor,
 } from "@/lib/scrollHold";
 
@@ -46,9 +44,9 @@ const reasons = [
   },
 ] as const;
 
-const COUNT = 2;
+const COUNT = 1;
 const GESTURE = 14;
-const COOL_MS = 720;
+const REVEAL_MS = 720;
 
 export function WhyDriversHub() {
   const sceneRef = useRef<HTMLDivElement>(null);
@@ -69,19 +67,10 @@ export function WhyDriversHub() {
     let anchor: PinAnchor = { y: 0, bottom: 0 };
     let revealed = 0;
     let skipPin = false;
-    let cooling = false;
-    let coolTimer = 0;
+    let revealReadyAt = 0;
     const measuredHeight = () => Math.ceil(moreInner.scrollHeight);
     let moreHeight = measuredHeight();
     let followExpand = 0;
-
-    const cool = () => {
-      cooling = true;
-      window.clearTimeout(coolTimer);
-      coolTimer = window.setTimeout(() => {
-        cooling = false;
-      }, COOL_MS);
-    };
 
     const mark = () => {
       markScrollPhase(scene, phase);
@@ -90,11 +79,32 @@ export function WhyDriversHub() {
     const freezeTarget = () => freezeTargetY(blur);
 
     const extraHeight = (count: number) =>
-      count >= 2 ? Math.ceil(moreHeight) : 0;
+      count >= 1 ? Math.ceil(moreHeight) : 0;
+
+    const topLimit = () =>
+      (document.querySelector(".dh-masthead-nav")?.getBoundingClientRect()
+        .bottom ?? 72) + 10;
+
+    const placeFrame = () => {
+      const box = card.getBoundingClientRect();
+      const y = Math.max(0, window.scrollY + (box.top - topLimit()));
+      if (Math.abs(y - window.scrollY) > 0.5) {
+        window.scrollTo({ top: y, behavior: "instant" });
+      }
+      anchor = {
+        y: window.scrollY,
+        bottom: card.getBoundingClientRect().bottom,
+      };
+    };
 
     const pin = () => {
       if (phase !== "hold") return true;
-      return syncPin(card, anchor);
+      const drift = window.scrollY - anchor.y;
+      if (drift < -24) return false;
+      if (drift > 0.5) {
+        window.scrollTo({ top: Math.max(0, anchor.y), behavior: "instant" });
+      }
+      return true;
     };
 
     const leaveUp = () => {
@@ -104,12 +114,12 @@ export function WhyDriversHub() {
       mark();
     };
 
-    const followHeight = () => {
-      if (phase !== "hold") return;
+    const followFrame = () => {
       cancelAnimationFrame(followExpand);
-      const ends = performance.now() + 1200;
+      const ends = performance.now() + REVEAL_MS;
       const tick = (now: number) => {
-        pin();
+        if (phase !== "hold") return;
+        placeFrame();
         if (now < ends) followExpand = requestAnimationFrame(tick);
       };
       followExpand = requestAnimationFrame(tick);
@@ -126,12 +136,9 @@ export function WhyDriversHub() {
         photo.toggleAttribute("inert", !on);
       });
       const nextHeight = `${extraHeight(count)}px`;
-      if (more.style.height !== nextHeight) {
-        more.style.height = nextHeight;
-        followHeight();
-      }
-      more.toggleAttribute("inert", count < 2);
-      scene.classList.toggle("is-copy-in", count >= 2);
+      if (more.style.height !== nextHeight) more.style.height = nextHeight;
+      more.toggleAttribute("inert", count < 1);
+      scene.classList.toggle("is-copy-in", count >= 1);
     };
 
     const finish = () => {
@@ -171,16 +178,24 @@ export function WhyDriversHub() {
         if (box.bottom > target + 8) skipPin = false;
         return;
       }
-      if (
-        revealed < COUNT &&
-        shouldLatchHold(box, target) &&
-        isNextHold(scene, box)
-      ) {
-        phase = "hold";
-        anchor = takePinAnchor(card);
-        mark();
-        paintHold(revealed);
+      if (revealed < COUNT && shouldStartHold(scene, box, target)) {
+        openHold();
       }
+    };
+
+    const canRelease = () =>
+      revealed >= COUNT && performance.now() >= revealReadyAt;
+
+    const openHold = () => {
+      phase = "hold";
+      mark();
+      if (revealed < COUNT) {
+        revealed = COUNT;
+        revealReadyAt = performance.now() + REVEAL_MS;
+      }
+      paintHold(revealed);
+      placeFrame();
+      followFrame();
     };
 
     const advanceHold = (delta: number) => {
@@ -188,27 +203,35 @@ export function WhyDriversHub() {
         leaveUp();
         return;
       }
-      if (cooling || Math.abs(delta) < GESTURE) return;
-
-      if (revealed < COUNT) {
-        revealed += 1;
-        paintHold(revealed);
-        cool();
-        return;
-      }
-      phase = "released";
-      mark();
+      if (Math.abs(delta) < GESTURE || revealed >= COUNT) return;
+      openHold();
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (phase !== "hold") return;
-      if (holdIsStale(card.getBoundingClientRect())) {
-        if (isPassedHold(card.getBoundingClientRect())) finish();
-        else leaveUp();
+      const action = holdFromGesture(
+        event.deltaY,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
+        leaveUp();
         return;
       }
-      if (event.deltaY < 0) {
-        leaveUp();
+      if (action === "finish") {
+        finish();
+        return;
+      }
+      if (action === "latch") {
+        event.preventDefault();
+        openHold();
+        return;
+      }
+      if (canRelease()) {
+        finish();
         return;
       }
       event.preventDefault();
@@ -220,12 +243,33 @@ export function WhyDriversHub() {
       touchY = event.touches[0]?.clientY ?? 0;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (phase !== "hold") return;
       const y = event.touches[0]?.clientY ?? touchY;
       const delta = touchY - y;
       touchY = y;
-      if (delta < 0) {
+      const action = holdFromGesture(
+        delta,
+        scene,
+        card,
+        freezeTarget(),
+        phase,
+        skipPin,
+      );
+      if (action === "ignore") return;
+      if (action === "leave") {
         leaveUp();
+        return;
+      }
+      if (action === "finish") {
+        finish();
+        return;
+      }
+      if (action === "latch") {
+        event.preventDefault();
+        openHold();
+        return;
+      }
+      if (canRelease()) {
+        finish();
         return;
       }
       event.preventDefault();
@@ -242,6 +286,10 @@ export function WhyDriversHub() {
       if (!down && !up) return;
       if (up) {
         leaveUp();
+        return;
+      }
+      if (canRelease()) {
+        finish();
         return;
       }
       event.preventDefault();
@@ -262,7 +310,6 @@ export function WhyDriversHub() {
     images.forEach((image) => image.addEventListener("load", apply));
 
     return () => {
-      window.clearTimeout(coolTimer);
       cancelAnimationFrame(followExpand);
       more.removeAttribute("style");
       scene.classList.remove("is-live", "is-copy-in");
