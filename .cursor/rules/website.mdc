@@ -1,0 +1,14 @@
+---
+description: Drivers Hub marketing site conventions
+alwaysApply: true
+---
+
+# Drivers Hub web
+
+- Follow PROJECT.md IA and tokens.
+- Server-render SEO content. No client-only prices or headings.
+- Reuse GlassCard / Button / SectionHeading. Do not create one-off card styles per page.
+- Package and service pages must include JSON-LD + breadcrumb.
+- WhatsApp: https://wa.me/94771410588
+- Redirect leftover WordPress URLs; do not recreate Elementor pages.
+- Routes live in `app/`. Shared copy lives in `content/`. Do not introduce a `src/` tree.

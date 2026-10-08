@@ -1,0 +1,68 @@
+:root {
+  --dh-bg: #dce6e5;
+  --dh-surface: rgba(247, 246, 244, 0.42);
+  --dh-card: rgba(255, 252, 249, 0.38);
+  --dh-ink: #16181d;
+  --dh-ink-secondary: #5c616b;
+  --dh-ink-muted: #9097a1;
+  --dh-brand: #01333c;
+  --dh-brand-soft: #001a1f;
+  --dh-hero-fallback: #15171c;
+  --dh-glass-fill: rgba(22, 30, 42, 0.16);
+  --dh-header-glass: rgba(247, 246, 244, 0.45);
+  --dh-footer-glass: rgba(247, 246, 244, 0.45);
+  --dh-header-height: 4rem;
+  --dh-border: rgba(17, 19, 24, 0.08);
+  --dh-badge: #23262d;
+  --dh-price: #e53935;
+  --dh-gold: #d4b15a;
+  --dh-wash-teal: rgba(19, 78, 74, 0.14);
+  --dh-wash-navy: rgba(30, 58, 138, 0.14);
+  --dh-wash-bronze: rgba(120, 53, 15, 0.14);
+  --dh-wash-plum: rgba(88, 28, 135, 0.14);
+  --dh-ink-teal: #134e4a;
+  --dh-ink-navy: #1e3a8a;
+  --dh-ink-bronze: #78350f;
+  --dh-ink-plum: #581c87;
+}
+
+@theme inline {
+  --color-marble: var(--dh-bg);
+  --color-surface: var(--dh-surface);
+  --color-card: var(--dh-card);
+  --color-ink: var(--dh-ink);
+  --color-ink-secondary: var(--dh-ink-secondary);
+  --color-ink-muted: var(--dh-ink-muted);
+  --color-brand: var(--dh-brand);
+  --color-brand-soft: var(--dh-brand-soft);
+  --color-hero: var(--dh-hero-fallback);
+  --color-glass-fill: var(--dh-glass-fill);
+  --color-header-glass: var(--dh-header-glass);
+  --color-footer-glass: var(--dh-footer-glass);
+  --color-line: var(--dh-border);
+  --color-badge: var(--dh-badge);
+  --color-price: var(--dh-price);
+  --color-gold: var(--dh-gold);
+  --color-wash-teal: var(--dh-wash-teal);
+  --color-wash-navy: var(--dh-wash-navy);
+  --color-wash-bronze: var(--dh-wash-bronze);
+  --color-wash-plum: var(--dh-wash-plum);
+  --color-ink-teal: var(--dh-ink-teal);
+  --color-ink-navy: var(--dh-ink-navy);
+  --color-ink-bronze: var(--dh-ink-bronze);
+  --color-ink-plum: var(--dh-ink-plum);
+
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-hero: 32px;
+  --radius-pill: 999px;
+
+  --font-sans: var(--font-poppins);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+
+  --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.72) inset,
+    0 12px 36px rgba(1, 51, 60, 0.08);
+}
